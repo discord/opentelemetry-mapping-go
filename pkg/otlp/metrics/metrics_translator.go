@@ -40,6 +40,7 @@ import (
 const (
 	metricName             string = "metric name"
 	errNoBucketsNoSumCount string = "no buckets mode and no send count sum are incompatible"
+	RateIntervalKey        string = "__rate_interval"
 )
 
 var (
@@ -157,6 +158,14 @@ func (t *Translator) mapNumberMetrics(
 		}
 
 		pointDims := dims.WithAttributeMap(p.Attributes())
+
+		var rateInterval int64
+		rateValue, exists := p.Attributes().Get(RateIntervalKey)
+		if exists {
+			rateInterval = rateValue.Int()
+			p.Attributes().Remove(RateIntervalKey)
+		}
+
 		var val float64
 		switch p.ValueType() {
 		case pmetric.NumberDataPointValueTypeDouble:
@@ -169,7 +178,14 @@ func (t *Translator) mapNumberMetrics(
 			continue
 		}
 
-		consumer.ConsumeTimeSeries(ctx, pointDims, dt, uint64(p.Timestamp()), val)
+		if rateInterval > 0 && dt == Count {
+			// We should use an empty type instead of a well-known string here,
+			// but this works for now and simplifies the dependency graph.
+			consumerCtx := context.WithValue(ctx, RateIntervalKey, rateInterval)
+			consumer.ConsumeTimeSeries(consumerCtx, pointDims, Rate, uint64(p.Timestamp()), val)
+		} else {
+			consumer.ConsumeTimeSeries(ctx, pointDims, dt, uint64(p.Timestamp()), val)
+		}
 	}
 }
 
@@ -218,6 +234,13 @@ func (t *Translator) mapNumberMonotonicMetrics(
 			continue
 		}
 
+		var rateInterval int64
+		rateValue, exists := p.Attributes().Get(RateIntervalKey)
+		if exists {
+			rateInterval = rateValue.Int()
+			p.Attributes().Remove(RateIntervalKey)
+		}
+
 		ts := uint64(p.Timestamp())
 		startTs := uint64(p.StartTimestamp())
 		pointDims := dims.WithAttributeMap(p.Attributes())
@@ -244,6 +267,15 @@ func (t *Translator) mapNumberMonotonicMetrics(
 			continue
 		}
 
+		dt := Count
+		consumerCtx := ctx
+		if rateInterval > 0 {
+			dt = Rate
+			// We should use an empty type instead of a well-known string here,
+			// but this works for now and simplifies the dependency graph.
+			consumerCtx = context.WithValue(consumerCtx, RateIntervalKey, rateInterval)
+		}
+
 		dx, isFirstPoint, shouldDropPoint := t.prevPts.MonotonicDiff(pointDims, startTs, ts, val)
 		if shouldDropPoint {
 			t.logger.Debug("Dropping point: timestamp is older or equal to timestamp of previous point received", zap.String(metricName, pointDims.name))
@@ -251,11 +283,11 @@ func (t *Translator) mapNumberMonotonicMetrics(
 		}
 
 		if !isFirstPoint {
-			consumer.ConsumeTimeSeries(ctx, pointDims, Count, ts, dx)
+			consumer.ConsumeTimeSeries(consumerCtx, pointDims, dt, ts, dx)
 		} else if i == 0 && t.shouldConsumeInitialValue(startTs, ts) {
 			// We only compute the first point in the timeseries if it is the first value in the datapoint slice.
 			// Todo: Investigate why we don't compute first val if i > 0 and add reason as comment.
-			consumer.ConsumeTimeSeries(ctx, pointDims, Count, ts, val)
+			consumer.ConsumeTimeSeries(consumerCtx, pointDims, dt, ts, val)
 		}
 	}
 }
