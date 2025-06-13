@@ -160,8 +160,7 @@ func (t *Translator) mapNumberMetrics(
 		pointDims := dims.WithAttributeMap(p.Attributes())
 
 		var rateInterval int64
-		rateValue, exists := p.Attributes().Get(RateIntervalKey)
-		if exists {
+		if rateValue, exists := p.Attributes().Get(RateIntervalKey); exists {
 			rateInterval = rateValue.Int()
 			p.Attributes().Remove(RateIntervalKey)
 		}
@@ -182,7 +181,11 @@ func (t *Translator) mapNumberMetrics(
 			// We should use an empty type instead of a well-known string here,
 			// but this works for now and simplifies the dependency graph.
 			consumerCtx := context.WithValue(ctx, RateIntervalKey, rateInterval)
-			consumer.ConsumeTimeSeries(consumerCtx, pointDims, Rate, uint64(p.Timestamp()), val)
+			if dt == Count {
+				consumer.ConsumeTimeSeries(consumerCtx, pointDims, Rate, uint64(p.Timestamp()), val)
+			} else {
+				consumer.ConsumeTimeSeries(consumerCtx, pointDims, dt, uint64(p.Timestamp()), val)
+			}
 		} else {
 			consumer.ConsumeTimeSeries(ctx, pointDims, dt, uint64(p.Timestamp()), val)
 		}
@@ -235,8 +238,7 @@ func (t *Translator) mapNumberMonotonicMetrics(
 		}
 
 		var rateInterval int64
-		rateValue, exists := p.Attributes().Get(RateIntervalKey)
-		if exists {
+		if rateValue, exists := p.Attributes().Get(RateIntervalKey); exists {
 			rateInterval = rateValue.Int()
 			p.Attributes().Remove(RateIntervalKey)
 		}
